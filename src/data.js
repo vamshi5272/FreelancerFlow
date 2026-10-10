@@ -1,0 +1,10 @@
+import {Router} from 'express'; import jwt from 'jsonwebtoken'; import {Client,Project,Task,Payment} from './models.js';
+const r=Router(), models={clients:Client,projects:Project,tasks:Task,payments:Payment};
+r.use((q,s,n)=>{if(q.path.startsWith('/auth'))return n();const t=(q.headers.authorization||'').replace(/^Bearer\s+/i,'');try{q.uid=jwt.verify(t,process.env.JWT_SECRET).sub;n()}catch{return s.status(401).json({message:'Please sign in again.'})}});
+for(const [name,M] of Object.entries(models)){
+ r.get('/'+name,async(q,s,n)=>{try{let query={owner:q.uid};const docs=await M.find(query).sort({createdAt:-1}).lean();s.json(docs)}catch(e){n(e)}});
+ r.post('/'+name,async(q,s,n)=>{try{const body={...q.body,owner:q.uid};delete body._id; if(name==='projects'&&!await Client.exists({_id:body.client,owner:q.uid}))return s.status(400).json({message:'Select a valid client.'});if(['tasks','payments'].includes(name)&&!await Project.exists({_id:body.project,owner:q.uid}))return s.status(400).json({message:'Select a valid project.'});if(name==='payments'&&Number(body.amount)<=0)return s.status(400).json({message:'Amount must be greater than zero.'});const doc=await M.create(body);s.status(201).json(doc)}catch(e){n(e)}});
+ r.patch('/'+name+'/:id',async(q,s,n)=>{try{const doc=await M.findOneAndUpdate({_id:q.params.id,owner:q.uid},{$set:q.body},{new:true,runValidators:true});if(!doc)return s.status(404).json({message:'Record not found.'});s.json(doc)}catch(e){n(e)}});
+ r.delete('/'+name+'/:id',async(q,s,n)=>{try{if(name==='clients'&&await Project.exists({owner:q.uid,client:q.params.id}))return s.status(409).json({message:'Delete or reassign this client’s projects first.'});if(name==='projects'){await Task.deleteMany({owner:q.uid,project:q.params.id});await Payment.deleteMany({owner:q.uid,project:q.params.id})}const doc=await M.findOneAndDelete({_id:q.params.id,owner:q.uid});if(!doc)return s.status(404).json({message:'Record not found.'});s.json({message:'Deleted.'})}catch(e){n(e)}});
+}
+export default r;
